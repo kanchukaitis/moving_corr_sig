@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moving_corr_sig"
+version = "0.1.0"
+description = "Significance tests for moving (windowed) correlation analyses: standard deviation, peak, and range tests against white- or red-noise nulls."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Kevin Anchukaitis" },
+]
+dependencies = [
+    "numpy>=1.20",
+    "scipy>=1.7",
+]
+
+[project.optional-dependencies]
+# ar1_fit() uses statsmodels' AutoReg for red-noise AR(1) fitting when
+# available, and falls back to an equivalent manual estimator if it's not
+# installed -- so statsmodels is optional, not required.
+statsmodels = ["statsmodels>=0.13"]
+# For running the demonstration notebook / plot_peak_test().
+notebook = ["jupyter", "matplotlib"]
+
+[project.urls]
+Homepage = "https://github.com/kanchukaitis/moving_corr_sig"
+Repository = "https://github.com/kanchukaitis/moving_corr_sig"
+
+[tool.setuptools]
+packages = ["moving_corr_sig"]
