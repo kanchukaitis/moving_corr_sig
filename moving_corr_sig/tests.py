@@ -1,6 +1,6 @@
 """
 Three significance tests for moving (windowed) correlation analyses, all
-built on a shared Monte Carlo engine (see `_mc_ensemble`).
+built on a shared Monte Carlo engine (see `_mc_ensemble` / `_run_test`).
 
   1. std_test        -- Gershunov et al. (2001): is the running-correlation
                          trace more (or less) variable through time than
@@ -51,6 +51,12 @@ __all__ = [
     "MovingCorrelationTest",
 ]
 
+# Rejection-sampling tolerance / retry budget for surrogate generation.
+# Not exposed as a parameter above white_noise_pair/red_noise_pair -- nothing
+# in this package has ever needed to override these.
+_TOL = 0.01
+_MAX_TRIES = 200
+
 
 @dataclass
 class TestResult:
@@ -65,7 +71,6 @@ class TestResult:
     target_corr: float = 0.0
     iters: int = 0
     window: int = 0
-    extra: dict = field(default_factory=dict)
 
     def __repr__(self):
         base = (f"TestResult(name={self.name!r}, observed={self.observed:.4f}, "
@@ -93,8 +98,8 @@ class TestResult:
         """
         Return the null-distribution quantile at an arbitrary confidence
         level (e.g. 0.90, 0.95, 0.975, 0.99), computed on demand from the
-        stored `null_distribution` -- not limited to whichever levels were
-        precomputed into `quantiles` at test-run time.
+        stored `null_distribution` -- not limited to whichever `levels` were
+        precomputed into `.quantiles` when the test was run.
 
         For `peak_test` results in particular, this is the significance
         threshold you'd draw as a horizontal line alongside the observed
@@ -102,13 +107,14 @@ class TestResult:
         the *maximum* correlation seen anywhere in each surrogate trace, a
         single threshold value already accounts for having searched the
         whole record, and applies uniformly across the plot -- points on the
-        observed trace above this line are the significant peaks.
+        observed trace above this line are the significant peaks. (See
+        `MovingCorrelationTest.plot_peak_test` for a ready-made version of
+        that plot.)
         """
         return float(np.quantile(self.null_distribution, level))
 
 
-def _mc_ensemble(n, window, target_corr, iters, noise, method, rng,
-                  phi_x=None, phi_y=None, tol=0.01, max_tries=200):
+def _mc_ensemble(n, window, target_corr, iters, noise, method, rng, phi_x=None, phi_y=None):
     """
     Run `iters` Monte Carlo draws of surrogate pairs (white or red noise) at
     the given target overall correlation, compute the moving-correlation
@@ -126,9 +132,9 @@ def _mc_ensemble(n, window, target_corr, iters, noise, method, rng,
 
     for i in range(iters):
         if noise == "white":
-            sx, sy = white_noise_pair(n, target_corr, rng, tol=tol, max_tries=max_tries)
+            sx, sy = white_noise_pair(n, target_corr, rng, tol=_TOL, max_tries=_MAX_TRIES)
         else:
-            sx, sy = red_noise_pair(n, target_corr, phi_x, phi_y, rng, tol=tol, max_tries=max_tries)
+            sx, sy = red_noise_pair(n, target_corr, phi_x, phi_y, rng, tol=_TOL, max_tries=_MAX_TRIES)
         r = moving_correlation(sx, sy, window, method=method)
         stds[i] = np.nanstd(r)
         maxs[i] = np.nanmax(r)
@@ -137,17 +143,49 @@ def _mc_ensemble(n, window, target_corr, iters, noise, method, rng,
     return {"std": stds, "max": maxs, "min": mins, "range": maxs - mins}
 
 
+def _observed_stat(r, statistic_key):
+    if statistic_key == "std":
+        return float(np.nanstd(r))
+    if statistic_key == "max":
+        return float(np.nanmax(r))
+    if statistic_key == "range":
+        return float(np.nanmax(r) - np.nanmin(r))
+    raise ValueError(f"unknown statistic_key {statistic_key!r}")
+
+
 def _resolve_ar1(x, y, noise):
     if noise == "red":
-        phi_x, _ = ar1_fit(x)
-        phi_y, _ = ar1_fit(y)
-        return phi_x, phi_y
+        return ar1_fit(x), ar1_fit(y)
     return None, None
 
 
+def _run_test(x, y, window, iters, noise, method, target_corr, rng, levels, statistic_key):
+    """
+    Shared implementation behind std_test/peak_test/range_test: compute the
+    observed statistic, build the matched Monte Carlo null ensemble, and
+    return everything each test needs to assemble its TestResult.
+    """
+    rng = rng or np.random.default_rng()
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n = len(x)
+
+    r_obs = moving_correlation(x, y, window, method=method)
+    observed = _observed_stat(r_obs, statistic_key)
+
+    if target_corr is None:
+        target_corr = float(np.corrcoef(x, y)[0, 1])
+
+    phi_x, phi_y = _resolve_ar1(x, y, noise)
+    ens = _mc_ensemble(n, window, target_corr, iters, noise, method, rng, phi_x, phi_y)
+    null = ens[statistic_key]
+
+    quantiles = {f"{round(q * 100, 4):g}": float(np.quantile(null, q)) for q in levels}
+    return observed, null, quantiles, target_corr
+
+
 def std_test(x, y, window, iters=1000, noise="white", method="pearson",
-             target_corr=None, rng=None, tol=0.01, max_tries=200,
-             levels=(0.01, 0.05, 0.10, 0.90, 0.95, 0.99)):
+             target_corr=None, rng=None, levels=(0.01, 0.05, 0.10, 0.90, 0.95, 0.99)):
     """
     Gershunov et al. (2001) test: is the standard deviation of the observed
     moving-correlation trace larger (or smaller) than expected from sampling
@@ -157,34 +195,18 @@ def std_test(x, y, window, iters=1000, noise="white", method="pearson",
     chance); p_value_lower is the lower-tail p (trace MORE stable than
     chance, as Gershunov et al. found for ENSO-AIR).
 
-    `levels` controls which quantiles of the null distribution are
-    precomputed into the returned TestResult's `.quantiles` dict (e.g. for
-    printing in `.summary()`). Any level can still be queried afterward via
-    `.threshold(level)`, precomputed or not.
+    `levels`: which null-distribution quantiles to precompute into
+    `.quantiles` (see `TestResult.threshold` for querying any level).
     """
-    rng = rng or np.random.default_rng()
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-    n = len(x)
+    observed, null, quantiles, target_corr = _run_test(
+        x, y, window, iters, noise, method, target_corr, rng, levels, "std")
 
-    r_obs = moving_correlation(x, y, window, method=method)
-    std_obs = float(np.nanstd(r_obs))
-
-    if target_corr is None:
-        target_corr = float(np.corrcoef(x, y)[0, 1])
-
-    phi_x, phi_y = _resolve_ar1(x, y, noise)
-    ens = _mc_ensemble(n, window, target_corr, iters, noise, method, rng,
-                        phi_x, phi_y, tol, max_tries)
-    null = ens["std"]
-
-    p_upper = float(np.mean(null >= std_obs))
-    p_lower = float(np.mean(null <= std_obs))
-    quantiles = {f"{int(round(q*1000))/10:g}": float(np.quantile(null, q)) for q in levels}
+    p_upper = float(np.mean(null >= observed))
+    p_lower = float(np.mean(null <= observed))
 
     return TestResult(
         name="Gershunov std test",
-        observed=std_obs,
+        observed=observed,
         null_distribution=null,
         p_value=p_upper,
         p_value_lower=p_lower,
@@ -197,8 +219,7 @@ def std_test(x, y, window, iters=1000, noise="white", method="pearson",
 
 
 def peak_test(x, y, window, iters=1000, noise="white", condition="observed",
-              method="pearson", rng=None, tol=0.01, max_tries=200,
-              levels=(0.90, 0.95, 0.99)):
+              method="pearson", rng=None, levels=(0.90, 0.95, 0.99)):
     """
     Is the single highest windowed correlation between x and y higher than
     chance predicts?
@@ -214,37 +235,23 @@ def peak_test(x, y, window, iters=1000, noise="white", condition="observed",
 
     One-tailed upper test.
 
-    `levels` controls which quantiles of the null distribution are
-    precomputed into the returned TestResult's `.quantiles` dict -- these
-    are the significance threshold(s) you'd plot as horizontal line(s)
-    alongside the observed moving-correlation trace (see
-    `MovingCorrelationTest.plot_peak_test` for a ready-made version of that
-    plot). Any level can still be queried afterward via `.threshold(level)`,
-    precomputed or not.
+    `levels`: which null-distribution quantiles to precompute into
+    `.quantiles` -- these are the significance threshold(s) you'd plot as
+    horizontal line(s) alongside the observed trace (see
+    `MovingCorrelationTest.plot_peak_test` and `TestResult.threshold`).
     """
     if condition not in ("zero", "observed"):
         raise ValueError("condition must be 'zero' or 'observed'")
-    rng = rng or np.random.default_rng()
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-    n = len(x)
 
-    r_obs = moving_correlation(x, y, window, method=method)
-    max_obs = float(np.nanmax(r_obs))
+    target_corr = 0.0 if condition == "zero" else None
+    observed, null, quantiles, target_corr = _run_test(
+        x, y, window, iters, noise, method, target_corr, rng, levels, "max")
 
-    target_corr = 0.0 if condition == "zero" else float(np.corrcoef(x, y)[0, 1])
-
-    phi_x, phi_y = _resolve_ar1(x, y, noise)
-    ens = _mc_ensemble(n, window, target_corr, iters, noise, method, rng,
-                        phi_x, phi_y, tol, max_tries)
-    null = ens["max"]
-
-    p = float(np.mean(null >= max_obs))
-    quantiles = {f"{int(round(q*1000))/10:g}": float(np.quantile(null, q)) for q in levels}
+    p = float(np.mean(null >= observed))
 
     return TestResult(
         name=f"Peak correlation test (condition={condition})",
-        observed=max_obs,
+        observed=observed,
         null_distribution=null,
         p_value=p,
         quantiles=quantiles,
@@ -252,13 +259,11 @@ def peak_test(x, y, window, iters=1000, noise="white", condition="observed",
         target_corr=target_corr,
         iters=iters,
         window=window,
-        extra={"condition": condition},
     )
 
 
 def range_test(x, y, window, iters=1000, noise="white", method="pearson",
-               target_corr=None, rng=None, tol=0.01, max_tries=200,
-               levels=(0.90, 0.95, 0.99)):
+               target_corr=None, rng=None, levels=(0.90, 0.95, 0.99)):
     """
     Is the swing between the highest and lowest windowed correlation
     (max - min) bigger than sampling noise around the overall (background)
@@ -271,32 +276,17 @@ def range_test(x, y, window, iters=1000, noise="white", method="pearson",
     conflate "is there a relationship" with "does it swing," which is why
     peak_test (not range_test) offers the zero-correlation option.
 
-    `levels` controls which quantiles of the null distribution are
-    precomputed into the returned TestResult's `.quantiles` dict. Any level
-    can still be queried afterward via `.threshold(level)`, precomputed or not.
+    `levels`: which null-distribution quantiles to precompute into
+    `.quantiles` (see `TestResult.threshold` for querying any level).
     """
-    rng = rng or np.random.default_rng()
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-    n = len(x)
+    observed, null, quantiles, target_corr = _run_test(
+        x, y, window, iters, noise, method, target_corr, rng, levels, "range")
 
-    r_obs = moving_correlation(x, y, window, method=method)
-    range_obs = float(np.nanmax(r_obs) - np.nanmin(r_obs))
-
-    if target_corr is None:
-        target_corr = float(np.corrcoef(x, y)[0, 1])
-
-    phi_x, phi_y = _resolve_ar1(x, y, noise)
-    ens = _mc_ensemble(n, window, target_corr, iters, noise, method, rng,
-                        phi_x, phi_y, tol, max_tries)
-    null = ens["range"]
-
-    p = float(np.mean(null >= range_obs))
-    quantiles = {f"{int(round(q*1000))/10:g}": float(np.quantile(null, q)) for q in levels}
+    p = float(np.mean(null >= observed))
 
     return TestResult(
         name="High-low range test",
-        observed=range_obs,
+        observed=observed,
         null_distribution=null,
         p_value=p,
         quantiles=quantiles,
@@ -337,8 +327,8 @@ class MovingCorrelationTest:
         self.r = moving_correlation(x, y, window, method=method)
         self.overall_corr = float(np.corrcoef(x, y)[0, 1])
         if noise == "red":
-            self.phi_x, _ = ar1_fit(x)
-            self.phi_y, _ = ar1_fit(y)
+            self.phi_x = ar1_fit(x)
+            self.phi_y = ar1_fit(y)
         else:
             self.phi_x = self.phi_y = None
 

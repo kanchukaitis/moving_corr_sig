@@ -24,12 +24,9 @@ Pin to a specific tag or commit for reproducibility:
 pip install git+https://github.com/kanchukaitis/moving_corr_sig.git@v0.1.0
 ```
 
-Optional extras:
+Optional extra:
 
 ```bash
-# statsmodels-backed AR(1) fitting (falls back to a manual estimator without it)
-pip install "moving_corr_sig[statsmodels] @ git+https://github.com/kanchukaitis/moving_corr_sig.git"
-
 # for running the demonstration notebook / plot_peak_test()
 pip install "moving_corr_sig[notebook] @ git+https://github.com/kanchukaitis/moving_corr_sig.git"
 ```

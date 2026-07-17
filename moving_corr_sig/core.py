@@ -105,48 +105,25 @@ def ar1_fit(x):
 
         x_t = c + phi * x_{t-1} + e_t
 
-    Uses statsmodels' `AutoReg` (least-squares AR fitting -- the same
+    using statsmodels' `AutoReg` (least-squares AR fitting -- the same
     philosophy as the original ARFIT toolkit this project is descended
-    from) when statsmodels is installed. Falls back to an equivalent
-    hand-rolled OLS-on-demeaned-series estimator if it is not, so this
-    package doesn't hard-require statsmodels as a dependency.
+    from). Requires statsmodels.
 
     Returns
     -------
     phi : float
         Lag-1 autoregressive coefficient (clipped to (-0.98, 0.98) for
         numerical stability of downstream simulation).
-    sigma_e : float
-        Standard deviation of the innovations e_t (residuals after removing
-        the fitted AR(1) structure).
     """
+    from statsmodels.tsa.ar_model import AutoReg
+
     x = _as_1d_float(x, "x")
-
-    try:
-        from statsmodels.tsa.ar_model import AutoReg
-        res = AutoReg(x, lags=1, trend="c", old_names=False).fit()
-        # Index positionally (not by name) since statsmodels' parameter
-        # naming for the lag term varies slightly across versions/inputs;
-        # with lags=1 and trend='c' there are always exactly two params,
-        # [intercept, ar_lag1_coefficient].
-        phi = float(np.clip(res.params[-1], -0.98, 0.98))
-        resid = np.asarray(res.resid, dtype=float)
-        sigma_e = float(resid.std(ddof=1)) if resid.size > 1 else 0.0
-        return phi, sigma_e
-    except ImportError:
-        pass
-
-    # Fallback: manual OLS estimator of phi on the demeaned series,
-    # equivalent to Yule-Walker at lag 1.
-    xc = x - x.mean()
-    denom = np.sum(xc[:-1] ** 2)
-    if denom == 0:
-        return 0.0, xc.std(ddof=1) if len(xc) > 1 else 0.0
-    phi = np.sum(xc[1:] * xc[:-1]) / denom
-    phi = float(np.clip(phi, -0.98, 0.98))
-    resid = xc[1:] - phi * xc[:-1]
-    sigma_e = float(resid.std(ddof=1)) if len(resid) > 1 else 0.0
-    return phi, sigma_e
+    res = AutoReg(x, lags=1, trend="c", old_names=False).fit()
+    # Index positionally (not by name) since statsmodels' parameter naming
+    # for the lag term varies slightly across versions/inputs; with lags=1
+    # and trend='c' there are always exactly two params,
+    # [intercept, ar_lag1_coefficient].
+    return float(np.clip(res.params[-1], -0.98, 0.98))
 
 
 def white_noise_pair(n, target_corr, rng, tol=0.01, max_tries=200):
