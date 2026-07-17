@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "moving_corr_sig"
-version = "0.1.0"
+version = "0.2.0"
 description = "Significance tests for moving (windowed) correlation analyses: standard deviation, peak, and range tests against white- or red-noise nulls."
 readme = "README.md"
 requires-python = ">=3.9"

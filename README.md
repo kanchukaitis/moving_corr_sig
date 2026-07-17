@@ -21,7 +21,7 @@ pip install git+https://github.com/kanchukaitis/moving_corr_sig.git
 Pin to a specific tag or commit for reproducibility:
 
 ```bash
-pip install git+https://github.com/kanchukaitis/moving_corr_sig.git@v0.1.0
+pip install git+https://github.com/kanchukaitis/moving_corr_sig.git@v0.2.0
 ```
 
 Optional extra:
