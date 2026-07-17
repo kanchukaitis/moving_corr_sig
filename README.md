@@ -71,6 +71,8 @@ or just `pip install matplotlib`); the rest of the package does not.
 See `moving_corr_sig_demo.ipynb` for a full walkthrough, including validation
 against Gershunov et al. (2001) Table 1.
 
+See `CHANGELOG.md` for a history of changes, including breaking ones.
+
 ## Reference
 
 Gershunov, A., N. Schneider, and T. Barnett, 2001. Low-frequency modulation
